@@ -17,21 +17,31 @@ type directoryStorage string
 
 // filename for certificate / key / json file
 func (d directoryStorage) certFile(name, ext string) string {
-	return filepath.Join(d.certDir(name), name+"."+ext)
+	x := filepath.Join(d.certDir(name), name+"."+ext)
+	fmt.Printf("CERTFILE: %q\n", x)
+	return x
 }
 func (d directoryStorage) certDir(name string) string {
-	return filepath.Join(string(d), "certificates", name)
+	x := filepath.Join(string(d), "certificates", name)
+	fmt.Printf("CERTDIR: %q\n", x)
+	return x
 }
 
 func (d directoryStorage) accountDirectory(acmeHost string) string {
-	return filepath.Join(string(d), ".letsencrypt", acmeHost)
+	x := filepath.Join(string(d), ".letsencrypt", acmeHost)
+	fmt.Printf("CERTACCT: %q\n", x)
+	return x
 }
 
 func (d directoryStorage) accountFile(acmeHost string) string {
-	return filepath.Join(d.accountDirectory(acmeHost), "account.json")
+	x := filepath.Join(d.accountDirectory(acmeHost), "account.json")
+	fmt.Printf("CERTACCFILE: %q\n", x)
+	return x
 }
 func (d directoryStorage) accountKeyFile(acmeHost string) string {
-	return filepath.Join(d.accountDirectory(acmeHost), "account.key")
+	x := filepath.Join(d.accountDirectory(acmeHost), "account.key")
+	fmt.Printf("CERTACCKEY: %q\n", x)
+	return x
 }
 
 const perms os.FileMode = 0600
