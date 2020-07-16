@@ -22,7 +22,7 @@ type DomainConfig struct {
 
 	// These fields contain instantiated provider instances once everything is linked up.
 	// This linking is in two phases:
-	// 1. Metadata (name/type) is availible just from the dnsconfig. Validation can use that.
+	// 1. Metadata (name/type) is available just from the dnsconfig. Validation can use that.
 	// 2. Final driver instances are loaded after we load credentials. Any actual provider interaction requires that.
 	RegistrarInstance    *RegistrarInstance     `json:"-"`
 	DNSProviderInstances []*DNSProviderInstance `json:"-"`
@@ -79,7 +79,7 @@ func (dc *DomainConfig) Punycode() error {
 			if err != nil {
 				return err
 			}
-		case "A", "AAAA", "CAA", "NAPTR", "SOA", "SSHFP", "TXT", "TLSA", "AZURE_ALIAS":
+		case "A", "AAAA", "CAA", "DS", "NAPTR", "SOA", "SSHFP", "TXT", "TLSA", "AZURE_ALIAS":
 			// Nothing to do.
 		default:
 			msg := fmt.Sprintf("Punycode rtype %v unimplemented", rec.Type)

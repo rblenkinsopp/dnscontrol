@@ -28,7 +28,8 @@
   "CLOUDFLAREAPI_OLD": {
     "apikey": "$CF_KEY",
     "apiuser": "$CF_USER",
-    "domain": "$CF_DOMAIN"
+    "domain": "$CF_DOMAIN",
+    "knownFailures": "54"
   },
   "CLOUDNS": {
     "auth-id": "$CLOUDNS_AUTH_ID",
@@ -103,6 +104,11 @@
     "app-secret-key": "$OVH_APP_SECRET_KEY",
     "consumer-key": "$OVH_CONSUMER_KEY",
     "domain": "$OVH_DOMAIN"
+  },
+  "POWERDNS": {
+    "apikey": "$POWERDNS_APIKEY",
+    "apiurl": "$POWERDNS_APIURL",
+    "servername": "$POWERDNS_SERVERNAME"
   },
   "ROUTE53": {
     "KeyId": "$R53_KEY_ID",

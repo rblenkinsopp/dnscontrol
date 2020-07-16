@@ -373,6 +373,15 @@ func naptr(name string, order uint16, preference uint16, flags string, service s
 	return r
 }
 
+func ds(name string, keyTag uint16, algorithm, digestType uint8, digest string) *rec {
+	r := makeRec(name, "", "DS")
+	r.DsKeyTag = keyTag
+	r.DsAlgorithm = algorithm
+	r.DsDigestType = digestType
+	r.DsDigest = digest
+	return r
+}
+
 func srv(name string, priority, weight, port uint16, target string) *rec {
 	r := makeRec(name, target, "SRV")
 	r.SrvPriority = priority
@@ -699,7 +708,7 @@ func makeTests(t *testing.T) []*TestGroup {
 			tc("IDN CNAME AND Target", cname("öoö", "ööö.企业.")),
 		),
 
-		testgroup("page size",
+		testgroup("pager101",
 			// Tests the paging code of providers.  Many providers page at 100.
 			// Notes:
 			//  - Gandi: page size is 100, therefore we test with 99, 100, and 101
@@ -711,12 +720,18 @@ func makeTests(t *testing.T) []*TestGroup {
 			tc("101 records", manyA("rec%04d", "1.2.3.4", 101)...),
 		),
 
-		testgroup("Large updates",
-			// Verify https://github.com/StackExchange/dnscontrol/issues/493
+		testgroup("pager601",
+			// AWS:  https://github.com/StackExchange/dnscontrol/issues/493
 			only("ROUTE53"),
-			tc("600 records", manyA("rec%04d", "1.2.3.4", 600)...),
-			tc("Update 600 records", manyA("rec%04d", "1.2.3.5", 600)...),
-			tc("Empty"), // Delete them all
+			tc("601 records", manyA("rec%04d", "1.2.3.4", 600)...),
+			tc("Update 601 records", manyA("rec%04d", "1.2.3.5", 600)...),
+		),
+
+		testgroup("pager1201",
+			// AWS:  https://github.com/StackExchange/dnscontrol/issues/493
+			// Azure: https://github.com/StackExchange/dnscontrol/issues/770
+			//only("ROUTE53", "AZURE_DNS"),
+			only("ROUTE53"), // Azure is failing ATM.
 			tc("1200 records", manyA("rec%04d", "1.2.3.4", 1200)...),
 			tc("Update 1200 records", manyA("rec%04d", "1.2.3.5", 1200)...),
 		),
@@ -827,6 +842,37 @@ func makeTests(t *testing.T) []*TestGroup {
 			),
 			tc("3x255-byte TXTMulti",
 				txtmulti("foo3", []string{strings.Repeat("X", 255), strings.Repeat("Y", 255), strings.Repeat("Z", 255)})),
+		),
+
+		testgroup("DS",
+			requires(providers.CanUseDS),
+			tc("create DS", ds("@", 1, 13, 1, "ADIGEST")),
+			tc("modify field 1", ds("@", 65535, 13, 1, "ADIGEST")),
+			tc("modify field 3", ds("@", 65535, 13, 2, "ADIGEST")),
+			tc("modify field 2+3", ds("@", 65535, 1, 4, "ADIGEST")),
+			tc("modify field 2", ds("@", 65535, 3, 4, "ADIGEST")),
+			tc("modify field 2", ds("@", 65535, 254, 4, "ADIGEST")),
+			tc("delete 1, create 1", ds("foo", 2, 13, 4, "ADIGEST")),
+			tc("add 2 more DS", ds("foo", 2, 13, 4, "ADIGEST"), ds("@", 65535, 5, 4, "ADIGEST"), ds("@", 65535, 253, 4, "ADIGEST")),
+		),
+
+		testgroup("DS (children only)",
+			requires(providers.CanUseDSForChildren),
+			// Use a valid digest value here, because GCLOUD (which implements this capability) verifies
+			// the value passed in is a valid digest. RFC 4034, s5.1.4 specifies SHA1 as the only digest
+			// algo at present, i.e. only hexadecimal values currently usable.
+			tc("create DS", ds("child", 1, 13, 1, "0123456789ABCDEF")),
+			tc("modify field 1", ds("child", 65535, 13, 1, "0123456789ABCDEF")),
+			tc("modify field 3", ds("child", 65535, 13, 2, "0123456789ABCDEF")),
+			tc("modify field 2+3", ds("child", 65535, 1, 4, "0123456789ABCDEF")),
+			tc("modify field 2", ds("child", 65535, 3, 4, "0123456789ABCDEF")),
+			tc("modify field 2", ds("child", 65535, 254, 4, "0123456789ABCDEF")),
+			tc("delete 1, create 1", ds("another-child", 2, 13, 4, "0123456789ABCDEF")),
+			tc("add 2 more DS",
+				ds("another-child", 2, 13, 4, "0123456789ABCDEF"),
+				ds("another-child", 65535, 5, 4, "0123456789ABCDEF"),
+				ds("another-child", 65535, 253, 4, "0123456789ABCDEF"),
+			),
 		),
 
 		//

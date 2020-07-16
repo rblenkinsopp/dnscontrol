@@ -44,6 +44,7 @@ var features = providers.DocumentationNotes{
 	providers.CanUseSRV:              providers.Can(),
 	providers.CanUseTLSA:             providers.Can(),
 	providers.CanUseSSHFP:            providers.Can(),
+	providers.CanUseDS:               providers.Can(),
 	providers.DocCreateDomains:       providers.Can(),
 	providers.DocDualHost:            providers.Cannot("Cloudflare will not work well in situations where it is not the only DNS server"),
 	providers.DocOfficiallySupported: providers.Can(),
@@ -56,8 +57,8 @@ func init() {
 	providers.RegisterCustomRecordType("CF_TEMP_REDIRECT", "CLOUDFLAREAPI", "")
 }
 
-// CloudflareApi is the handle for API calls.
-type CloudflareApi struct {
+// CloudflareAPI is the handle for API calls.
+type CloudflareAPI struct {
 	ApiKey          string `json:"apikey"`
 	ApiToken        string `json:"apitoken"`
 	ApiUser         string `json:"apiuser"`
@@ -65,7 +66,7 @@ type CloudflareApi struct {
 	AccountName     string `json:"accountname"`
 	domainIndex     map[string]string
 	nameservers     map[string][]string
-	ipConversions   []transform.IpConversion
+	ipConversions   []transform.IPConversion
 	ignoredLabels   []string
 	manageRedirects bool
 }
@@ -81,7 +82,7 @@ func labelMatches(label string, matches []string) bool {
 }
 
 // GetNameservers returns the nameservers for a domain.
-func (c *CloudflareApi) GetNameservers(domain string) ([]*models.Nameserver, error) {
+func (c *CloudflareAPI) GetNameservers(domain string) ([]*models.Nameserver, error) {
 	if c.domainIndex == nil {
 		if err := c.fetchDomainList(); err != nil {
 			return nil, err
@@ -94,7 +95,8 @@ func (c *CloudflareApi) GetNameservers(domain string) ([]*models.Nameserver, err
 	return models.ToNameservers(ns)
 }
 
-func (c *CloudflareApi) ListZones() ([]string, error) {
+// ListZones returns a list of the DNS zones.
+func (c *CloudflareAPI) ListZones() ([]string, error) {
 	if err := c.fetchDomainList(); err != nil {
 		return nil, err
 	}
@@ -106,7 +108,7 @@ func (c *CloudflareApi) ListZones() ([]string, error) {
 }
 
 // GetZoneRecords gets the records of a zone and returns them in RecordConfig format.
-func (c *CloudflareApi) GetZoneRecords(domain string) (models.Records, error) {
+func (c *CloudflareAPI) GetZoneRecords(domain string) (models.Records, error) {
 	id, err := c.getDomainID(domain)
 	if err != nil {
 		return nil, err
@@ -123,7 +125,7 @@ func (c *CloudflareApi) GetZoneRecords(domain string) (models.Records, error) {
 	return records, nil
 }
 
-func (c *CloudflareApi) getDomainID(name string) (string, error) {
+func (c *CloudflareAPI) getDomainID(name string) (string, error) {
 	if c.domainIndex == nil {
 		if err := c.fetchDomainList(); err != nil {
 			return "", err
@@ -137,7 +139,7 @@ func (c *CloudflareApi) getDomainID(name string) (string, error) {
 }
 
 // GetDomainCorrections returns a list of corrections to update a domain.
-func (c *CloudflareApi) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Correction, error) {
+func (c *CloudflareAPI) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Correction, error) {
 	id, err := c.getDomainID(dc.Name)
 	if err != nil {
 		return nil, err
@@ -264,16 +266,16 @@ func checkNSModifications(dc *models.DomainConfig) {
 	dc.Records = newList
 }
 
-func (c *CloudflareApi) checkUniversalSSL(dc *models.DomainConfig, id string) (changed bool, newState bool, err error) {
-	expected_str := dc.Metadata[metaUniversalSSL]
-	if expected_str == "" {
-		return false, false, fmt.Errorf("Metadata not set.")
+func (c *CloudflareAPI) checkUniversalSSL(dc *models.DomainConfig, id string) (changed bool, newState bool, err error) {
+	expectedStr := dc.Metadata[metaUniversalSSL]
+	if expectedStr == "" {
+		return false, false, fmt.Errorf("metadata not set")
 	}
 
 	if actual, err := c.getUniversalSSL(id); err == nil {
 		// convert str to bool
 		var expected bool
-		if expected_str == "off" {
+		if expectedStr == "off" {
 			expected = false
 		} else {
 			expected = true
@@ -284,7 +286,7 @@ func (c *CloudflareApi) checkUniversalSSL(dc *models.DomainConfig, id string) (c
 		}
 		return false, expected, nil
 	}
-	return false, false, fmt.Errorf("error receiving universal ssl state:")
+	return false, false, fmt.Errorf("error receiving universal ssl state")
 }
 
 const (
@@ -303,7 +305,7 @@ func checkProxyVal(v string) (string, error) {
 	return v, nil
 }
 
-func (c *CloudflareApi) preprocessConfig(dc *models.DomainConfig) error {
+func (c *CloudflareAPI) preprocessConfig(dc *models.DomainConfig) error {
 
 	// Determine the default proxy setting.
 	var defProxy string
@@ -321,7 +323,7 @@ func (c *CloudflareApi) preprocessConfig(dc *models.DomainConfig) error {
 	if u := dc.Metadata[metaUniversalSSL]; u != "" {
 		u = strings.ToLower(u)
 		if u != "on" && u != "off" {
-			return fmt.Errorf("Bad metadata value for %s: '%s'. Use on/off.", metaUniversalSSL, u)
+			return fmt.Errorf("bad metadata value for %s: '%s'. Use on/off", metaUniversalSSL, u)
 		}
 	}
 
@@ -395,7 +397,7 @@ func (c *CloudflareApi) preprocessConfig(dc *models.DomainConfig) error {
 		if ip == nil {
 			return fmt.Errorf("%s is not a valid ip address", rec.GetTargetField())
 		}
-		newIP, err := transform.TransformIP(ip, c.ipConversions)
+		newIP, err := transform.IP(ip, c.ipConversions)
 		if err != nil {
 			return err
 		}
@@ -407,7 +409,7 @@ func (c *CloudflareApi) preprocessConfig(dc *models.DomainConfig) error {
 }
 
 func newCloudflare(m map[string]string, metadata json.RawMessage) (providers.DNSServiceProvider, error) {
-	api := &CloudflareApi{}
+	api := &CloudflareAPI{}
 	api.ApiUser, api.ApiKey, api.ApiToken = m["apiuser"], m["apikey"], m["apitoken"]
 	// check api keys from creds json file
 	if api.ApiToken == "" && (api.ApiKey == "" || api.ApiUser == "") {
@@ -459,23 +461,26 @@ func newCloudflare(m map[string]string, metadata json.RawMessage) (providers.DNS
 
 // Used on the "existing" records.
 type cfRecData struct {
-	Name          string   `json:"name"`
-	Target        cfTarget `json:"target"`
-	Service       string   `json:"service"`       // SRV
-	Proto         string   `json:"proto"`         // SRV
-	Priority      uint16   `json:"priority"`      // SRV
-	Weight        uint16   `json:"weight"`        // SRV
-	Port          uint16   `json:"port"`          // SRV
-	Tag           string   `json:"tag"`           // CAA
-	Flags         uint8    `json:"flags"`         // CAA
-	Value         string   `json:"value"`         // CAA
-	Usage         uint8    `json:"usage"`         // TLSA
-	Selector      uint8    `json:"selector"`      // TLSA
-	Matching_Type uint8    `json:"matching_type"` // TLSA
-	Certificate   string   `json:"certificate"`   // TLSA
-	Algorithm     uint8    `json:"algorithm"`     // SSHFP
-	Hash_Type     uint8    `json:"type"`          // SSHFP
-	Fingerprint   string   `json:"fingerprint"`   // SSHFP
+	Name         string   `json:"name"`
+	Target       cfTarget `json:"target"`
+	Service      string   `json:"service"`       // SRV
+	Proto        string   `json:"proto"`         // SRV
+	Priority     uint16   `json:"priority"`      // SRV
+	Weight       uint16   `json:"weight"`        // SRV
+	Port         uint16   `json:"port"`          // SRV
+	Tag          string   `json:"tag"`           // CAA
+	Flags        uint8    `json:"flags"`         // CAA
+	Value        string   `json:"value"`         // CAA
+	Usage        uint8    `json:"usage"`         // TLSA
+	Selector     uint8    `json:"selector"`      // TLSA
+	MatchingType uint8    `json:"matching_type"` // TLSA
+	Certificate  string   `json:"certificate"`   // TLSA
+	Algorithm    uint8    `json:"algorithm"`     // SSHFP/DS
+	HashType     uint8    `json:"type"`          // SSHFP
+	Fingerprint  string   `json:"fingerprint"`   // SSHFP
+	KeyTag       uint16   `json:"key_tag"`       // DS
+	DigestType   uint8    `json:"digest_type"`   // DS
+	Digest       string   `json:"digest"`        // DS
 }
 
 // cfTarget is a SRV target. A null target is represented by an empty string, but
@@ -591,7 +596,7 @@ func getProxyMetadata(r *models.RecordConfig) map[string]string {
 	if r.Type != "A" && r.Type != "AAAA" && r.Type != "CNAME" {
 		return nil
 	}
-	proxied := false
+	var proxied bool
 	if r.Original != nil {
 		proxied = r.Original.(*cfRecord).Proxied
 	} else {
@@ -603,7 +608,7 @@ func getProxyMetadata(r *models.RecordConfig) map[string]string {
 }
 
 // EnsureDomainExists returns an error of domain does not exist.
-func (c *CloudflareApi) EnsureDomainExists(domain string) error {
+func (c *CloudflareAPI) EnsureDomainExists(domain string) error {
 	if _, ok := c.domainIndex[domain]; ok {
 		return nil
 	}

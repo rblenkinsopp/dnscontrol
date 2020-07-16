@@ -15,6 +15,9 @@ import (
 )
 
 var docNotes = providers.DocumentationNotes{
+	providers.CanUseAlias:            providers.Can(),
+	providers.CanUsePTR:              providers.Can(),
+	providers.CanUseTXTMulti:         providers.Cannot(),
 	providers.DocCreateDomains:       providers.Cannot(),
 	providers.DocOfficiallySupported: providers.Cannot(),
 	providers.DocDualHost:            providers.Can(),
@@ -44,7 +47,7 @@ func (n *nsone) GetNameservers(domain string) ([]*models.Nameserver, error) {
 }
 
 // GetZoneRecords gets the records of a zone and returns them in RecordConfig format.
-func (client *nsone) GetZoneRecords(domain string) (models.Records, error) {
+func (n *nsone) GetZoneRecords(domain string) (models.Records, error) {
 	return nil, fmt.Errorf("not implemented")
 	// This enables the get-zones subcommand.
 	// Implement this by extracting the code from GetDomainCorrections into
@@ -130,7 +133,9 @@ func buildRecord(recs models.Records, domain string, id string) *dns.Record {
 		Zone:   domain,
 	}
 	for _, r := range recs {
-		if r.Type == "TXT" {
+		if r.Type == "MX" {
+			rec.AddAnswer(&dns.Answer{Rdata: strings.Split(fmt.Sprintf("%d %v", r.MxPreference, r.GetTargetField()), " ")})
+		} else if r.Type == "TXT" {
 			rec.AddAnswer(&dns.Answer{Rdata: r.TxtStrings})
 		} else if r.Type == "SRV" {
 			rec.AddAnswer(&dns.Answer{Rdata: strings.Split(fmt.Sprintf("%d %d %d %v", r.SrvPriority, r.SrvWeight, r.SrvPort, r.GetTargetField()), " ")})
@@ -150,6 +155,11 @@ func convert(zr *dns.ZoneRecord, domain string) ([]*models.RecordConfig, error) 
 		}
 		rec.SetLabelFromFQDN(zr.Domain, domain)
 		switch rtype := zr.Type; rtype {
+		case "ALIAS":
+			rec.Type = rtype
+			if err := rec.SetTarget(ans); err != nil {
+				panic(fmt.Errorf("unparsable ALIAS record received from ns1: %w", err))
+			}
 		default:
 			if err := rec.PopulateFromString(rtype, ans, domain); err != nil {
 				panic(fmt.Errorf("unparsable record received from ns1: %w", err))

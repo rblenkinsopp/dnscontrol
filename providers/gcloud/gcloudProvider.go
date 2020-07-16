@@ -16,6 +16,7 @@ import (
 
 var features = providers.DocumentationNotes{
 	providers.CanGetZones:            providers.Can(),
+	providers.CanUseDSForChildren:    providers.Can(),
 	providers.CanUseCAA:              providers.Can(),
 	providers.CanUsePTR:              providers.Can(),
 	providers.CanUseSRV:              providers.Can(),
@@ -71,7 +72,7 @@ func New(cfg map[string]string, metadata json.RawMessage) (providers.DNSServiceP
 	if err != nil {
 		return nil, err
 	}
-	var nss *string = nil
+	var nss *string
 	if val, ok := cfg["name_server_set"]; ok {
 		fmt.Printf("GCLOUD :name_server_set %s configured\n", val)
 		nss = sPtr(val)
@@ -124,6 +125,8 @@ func (g *gcloud) GetNameservers(domain string) ([]*models.Nameserver, error) {
 	if err != nil {
 		return nil, err
 	}
+	//fmt.Printf("zone = %q\n", zone)
+	//fmt.Printf("zone.NameServers = %q\n", zone.NameServers)
 	return models.ToNameserversStripTD(zone.NameServers)
 }
 
