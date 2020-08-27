@@ -69,6 +69,10 @@
     "session-file-path": ".",
     "domain": "$HEDNS_DOMAIN"
   },
+  "HETZNER": {
+    "api-token": "$HETZNER_API_TOKEN",
+    "domain": "$HETZNER_DOMAIN"
+  },
   "HEXONET": {
     "apientity": "$HEXONET_ENTITY",
     "apilogin": "$HEXONET_UID",
