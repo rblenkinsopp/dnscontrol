@@ -14,23 +14,6 @@ Hetzner DNS provider (dns.hetzner.com)
 
 Info required in `creds.json`:
 	- api-token
-
-Supported record types:
-    - A
-    - AAAA
-    - NS
-    - MX
-    - CNAME
-    - RP
-    - TXT 
-    - SOA
-    - HINFO
-    - SRV
-    - DANE
-    - TLSA
-    - DS
-    - CAA
-
 */
 
 var features = providers.DocumentationNotes{
@@ -52,30 +35,24 @@ var features = providers.DocumentationNotes{
 }
 
 func init() {
-	providers.RegisterDomainServiceProviderType("HETZNER", NewProvider, features)
+	providers.RegisterDomainServiceProviderType("HETZNER", newProvider, features)
 }
 
-type HdnsProvider struct {
-	client *HdnsApiClient
-}
-
-func NewProvider(cfg map[string]string, _ json.RawMessage) (providers.DNSServiceProvider, error) {
+func newProvider(cfg map[string]string, _ json.RawMessage) (providers.DNSServiceProvider, error) {
 	apiToken := cfg["api-token"]
 
 	if apiToken == "" {
 		return nil, fmt.Errorf("api-token must be provided")
 	}
 
-	provider := &HdnsProvider{
-		client: NewHdnsApiClient(apiToken),
-	}
+	provider := NewAPIClient(apiToken)
 
 	return provider, nil
 }
 
-// ListZones list
-func (c *HdnsProvider) ListZones() ([]string, error) {
-	zones, err := c.client.GetZones("")
+// ListZones list all zones for this account
+func (c *APIClient) ListZones() ([]string, error) {
+	zones, err := c.GetZones("")
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +66,7 @@ func (c *HdnsProvider) ListZones() ([]string, error) {
 }
 
 // EnsureDomainExists creates the domain if it does not exist.
-func (c *HdnsProvider) EnsureDomainExists(domain string) error {
+func (c *APIClient) EnsureDomainExists(domain string) error {
 	zones, err := c.ListZones()
 	if err != nil {
 		return err
@@ -101,7 +78,7 @@ func (c *HdnsProvider) EnsureDomainExists(domain string) error {
 		}
 	}
 
-	_, err = c.client.CreateZone(Zone{
+	_, err = c.CreateZone(Zone{
 		Name: "domain",
 		TTL:  86400,
 	})
@@ -109,8 +86,9 @@ func (c *HdnsProvider) EnsureDomainExists(domain string) error {
 	return err
 }
 
-func (c *HdnsProvider) GetNameservers(domain string) ([]*models.Nameserver, error) {
-	zones, err := c.client.GetZones(domain)
+// GetNameservers returns the nameservers for this domain.
+func (c *APIClient) GetNameservers(domain string) ([]*models.Nameserver, error) {
+	zones, err := c.GetZones(domain)
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +97,8 @@ func (c *HdnsProvider) GetNameservers(domain string) ([]*models.Nameserver, erro
 	return nameservers, err
 }
 
-// GetDomainCorrections returns a list of corretions for the  domain.
-func (c *HdnsProvider) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Correction, error) {
+// GetDomainCorrections returns a list of corrections for the  domain.
+func (c *APIClient) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Correction, error) {
 	var corrections []*models.Correction
 
 	err := dc.Punycode()
@@ -154,14 +132,14 @@ func (c *HdnsProvider) GetDomainCorrections(dc *models.DomainConfig) ([]*models.
 		record := del.Existing.Original.(Record)
 		corrections = append(corrections, &models.Correction{
 			Msg: del.String(),
-			F:   func() error { return c.client.DeleteRecord(record) },
+			F:   func() error { return c.DeleteRecord(record) },
 		})
 	}
 
 	for _, cre := range toCreate {
 		record := Record{
 			Type:   cre.Desired.Type,
-			ZoneId: dc.Name,
+			ZoneID: dc.Name,
 			Name:   cre.Desired.Name,
 			Value:  cre.Desired.GetTargetCombined(),
 			TTL:    uint64(cre.Desired.TTL),
@@ -169,7 +147,7 @@ func (c *HdnsProvider) GetDomainCorrections(dc *models.DomainConfig) ([]*models.
 		corrections = append(corrections, &models.Correction{
 			Msg: cre.String(),
 			F: func() error {
-				_, err := c.client.CreateRecord(record)
+				_, err := c.CreateRecord(record)
 				return err
 			},
 		})
@@ -178,8 +156,8 @@ func (c *HdnsProvider) GetDomainCorrections(dc *models.DomainConfig) ([]*models.
 	for _, mod := range toModify {
 		record := Record{
 			Type:   mod.Desired.Type,
-			Id:     mod.Existing.Original.(Record).Id,
-			ZoneId: dc.Name,
+			ID:     mod.Existing.Original.(Record).ID,
+			ZoneID: dc.Name,
 			Name:   mod.Desired.Name,
 			Value:  mod.Desired.GetTargetCombined(),
 			TTL:    uint64(mod.Desired.TTL),
@@ -187,7 +165,7 @@ func (c *HdnsProvider) GetDomainCorrections(dc *models.DomainConfig) ([]*models.
 		corrections = append(corrections, &models.Correction{
 			Msg: mod.String(),
 			F: func() error {
-				_, err := c.client.UpdateRecord(record)
+				_, err := c.UpdateRecord(record)
 				return err
 			},
 		})
@@ -196,15 +174,16 @@ func (c *HdnsProvider) GetDomainCorrections(dc *models.DomainConfig) ([]*models.
 	return corrections, err
 }
 
-func (c *HdnsProvider) GetZoneRecords(domain string) (models.Records, error) {
-	zones, err := c.client.GetZones(domain)
+// GetZoneRecords returns all the records for this domain.
+func (c *APIClient) GetZoneRecords(domain string) (models.Records, error) {
+	zones, err := c.GetZones(domain)
 	if err != nil {
 		return nil, err
 	}
 
 	zone := zones[0]
 
-	records, err := c.client.GetRecords(zone.Id)
+	records, err := c.GetRecords(zone.ID)
 	if err != nil {
 		return nil, err
 	}

@@ -9,103 +9,62 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"time"
 )
 
-const ApiEndpoint = "https://dns.hetzner.com/api/v1"
+const apiEndpoint = "https://dns.hetzner.com/api/v1"
 
-// The Hetzner API uses a weird format for the timestamp which we have to deal with specially
-type Timestamp struct {
-	time.Time
-}
-
-func (c *Timestamp) UnmarshalJSON(data []byte) error {
-	input, err := strconv.Unquote(string(data))
-
-	if input == "" {
-		c.Time = time.Time{}
-		return nil
-	}
-
-	c.Time, err = time.Parse("2006-01-02 15:04:05.999 -0700 MST", input)
-	return err
-}
-
+// Zone is minimal representation of a Hetzner zone
 type Zone struct {
-	Id              string    `json:"id,omitempty"`
-	Created         Timestamp `json:"created,omitempty"`
-	Modified        Timestamp `json:"modified,omitempty"`
-	LegacyDNSHost   string    `json:"legacy_dns_host,omitempty"`
-	LegacyNS        []string  `json:"legacy_ns,omitempty"`
-	Name            string    `json:"name"`
-	NS              []string  `json:"ns,omitempty"`
-	Owner           string    `json:"owner,omitempty"`
-	Paused          bool      `json:"paused,omitempty"`
-	Permission      string    `json:"permission,omitempty"`
-	Project         string    `json:"project,omitempty"`
-	Registrar       string    `json:"registrar,omitempty"`
-	Status          string    `json:"status,omitempty"`
-	TTL             uint64    `json:"ttl"`
-	Verified        Timestamp `json:"verified,omitempty"`
-	RecordsCount    uint64    `json:"records_count,omitempty"`
-	IsSecondaryDNS  bool      `json:"is_secondary_dns,omitempty"`
-	TXTVerification struct {
-		Name  string `json:"name"`
-		Token string `json:"token"`
-	} `json:"txt_verification,omitempty"`
+	ID   string   `json:"id,omitempty"`
+	Name string   `json:"name"`
+	NS   []string `json:"ns,omitempty"`
+	TTL  uint64   `json:"ttl"`
 }
 
+// Record is a minimal representation of a Hetzner record
 type Record struct {
-	Type     string    `json:"type"`
-	Id       string    `json:"id,omitempty"`
-	Created  Timestamp `json:"created,omitempty"`
-	Modified Timestamp `json:"modified,omitempty"`
-	ZoneId   string    `json:"zone_id"`
-	Name     string    `json:"name"`
-	Value    string    `json:"value"`
-	TTL      uint64    `json:"ttl"`
+	Type   string `json:"type"`
+	ID     string `json:"id,omitempty"`
+	ZoneID string `json:"zone_id"`
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	TTL    uint64 `json:"ttl"`
 }
 
+// Meta contains extra metadata on a result
 type Meta struct {
 	Pagination Pagination `json:"pagination,omitempty"`
 }
-//"meta":{"pagination":{"page":1,"per_page":2,"previous_page":1,"next_page":2,"last_page":2,"total_entries":3}}}
 
+// Pagination lists the current and last page
 type Pagination struct {
 	Page         uint64 `json:"page"`
-	PerPage      uint64 `json:"per_page"`
 	LastPage     uint64 `json:"last_page"`
-	TotalEntries uint64 `json:"total_entries"`
 }
 
-type HdnsApiClient struct {
+// APIClient is a Hetzner API client
+type APIClient struct {
 	apiToken   string
 	httpClient *http.Client
 }
 
-func NewHdnsApiClient(apiToken string) *HdnsApiClient {
-	return &HdnsApiClient{
+// NewAPIClient creates a new Hetzner API Client
+func NewAPIClient(apiToken string) *APIClient {
+	return &APIClient{
 		apiToken: apiToken,
-		httpClient: &http.Client{
-			Transport: nil,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-			Jar:     nil,
-			Timeout: 0,
-		},
+		httpClient: &http.Client{},
 	}
 }
 
-func (c *HdnsApiClient) request(method string, path string, queryStrings url.Values, input interface{}, output interface{}) (*Meta, error) {
-	apiUrl, err := url.Parse(ApiEndpoint)
+func (c *APIClient) request(method string, path string, queryStrings url.Values, input interface{}, output interface{}) (*Meta, error) {
+	apiURL, err := url.Parse(apiEndpoint)
 	if err != nil {
 		return nil, err
 	}
-	apiUrl.Path += path
+	apiURL.Path += path
 
 	if queryStrings != nil {
-		apiUrl.RawQuery = queryStrings.Encode()
+		apiURL.RawQuery = queryStrings.Encode()
 	}
 
 	var body io.Reader = nil
@@ -117,7 +76,7 @@ func (c *HdnsApiClient) request(method string, path string, queryStrings url.Val
 		body = bytes.NewBuffer(j)
 	}
 
-	request, err := http.NewRequest(method, apiUrl.String(), body)
+	request, err := http.NewRequest(method, apiURL.String(), body)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +128,8 @@ func (c *HdnsApiClient) request(method string, path string, queryStrings url.Val
 	return nil, nil
 }
 
-func (c *HdnsApiClient) GetZones(name string) ([]Zone, error) {
+// GetZones returns all zones associated with the account
+func (c *APIClient) GetZones(name string) ([]Zone, error) {
 	var response struct {
 		Zones []Zone `json:"zones"`
 	}
@@ -195,15 +155,17 @@ func (c *HdnsApiClient) GetZones(name string) ([]Zone, error) {
 	return response.Zones, err
 }
 
-func (c *HdnsApiClient) GetZone(zoneId string) (Zone, error) {
+// GetZone returns an Zone object represented by the zoneID
+func (c *APIClient) GetZone(zoneID string) (Zone, error) {
 	var response struct {
 		Zone Zone `json:"zone"`
 	}
-	_, err := c.request(http.MethodGet, "/zones/"+zoneId, nil, nil, &response)
+	_, err := c.request(http.MethodGet, "/zones/"+zoneID, nil, nil, &response)
 	return response.Zone, err
 }
 
-func (c *HdnsApiClient) CreateZone(zone Zone) (Zone, error) {
+// CreateZone creates a new zone
+func (c *APIClient) CreateZone(zone Zone) (Zone, error) {
 	request := struct {
 		Name string `json:"name"`
 		TTL  uint64 `json:"ttl"`
@@ -218,7 +180,8 @@ func (c *HdnsApiClient) CreateZone(zone Zone) (Zone, error) {
 	return response.Zone, err
 }
 
-func (c *HdnsApiClient) UpdateZone(zone Zone) (Zone, error) {
+// UpdateZone updates an existing zone
+func (c *APIClient) UpdateZone(zone Zone) (Zone, error) {
 	request := struct {
 		Name string `json:"name"`
 		TTL  uint64 `json:"ttl"`
@@ -233,18 +196,20 @@ func (c *HdnsApiClient) UpdateZone(zone Zone) (Zone, error) {
 	return response.Zone, err
 }
 
-func (c *HdnsApiClient) DeleteZone(zone Zone) error {
-	_, err := c.request(http.MethodDelete, "/zones/"+zone.Id, nil, nil, nil)
+// DeleteZone deletes and existing zone
+func (c *APIClient) DeleteZone(zone Zone) error {
+	_, err := c.request(http.MethodDelete, "/zones/"+zone.ID, nil, nil, nil)
 	return err
 }
 
-func (c *HdnsApiClient) GetRecords(zoneId string) ([]Record, error) {
+// GetRecords returns all records associated with the zoneID
+func (c *APIClient) GetRecords(zoneID string) ([]Record, error) {
 	var response struct {
 		Records []Record `json:"records"`
 	}
 	const method = http.MethodGet
 	const path = "/records"
-	parameters := url.Values{"zone_id": {zoneId}}
+	parameters := url.Values{"zone_id": {zoneID}}
 
 	meta, err := c.request(method, path, parameters, nil, &response)
 	for meta != nil && meta.Pagination.Page < meta.Pagination.LastPage {
@@ -264,15 +229,17 @@ func (c *HdnsApiClient) GetRecords(zoneId string) ([]Record, error) {
 	return response.Records, err
 }
 
-func (c *HdnsApiClient) GetRecord(recordId string) (Record, error) {
+// GetRecord returns a existing record based on the recordID
+func (c *APIClient) GetRecord(recordID string) (Record, error) {
 	var response struct {
 		Record Record `json:"record"`
 	}
-	_, err := c.request(http.MethodGet, "/record/"+recordId, nil, nil, &response)
+	_, err := c.request(http.MethodGet, "/record/"+recordID, nil, nil, &response)
 	return response.Record, err
 }
 
-func (c *HdnsApiClient) CreateRecord(record Record) (Record, error) {
+// CreateRecord creates a new record
+func (c *APIClient) CreateRecord(record Record) (Record, error) {
 	var response struct {
 		Record Record `json:"record"`
 	}
@@ -280,15 +247,17 @@ func (c *HdnsApiClient) CreateRecord(record Record) (Record, error) {
 	return response.Record, err
 }
 
-func (c *HdnsApiClient) UpdateRecord(record Record) (Record, error) {
+// UpdateRecord updates and existing record
+func (c *APIClient) UpdateRecord(record Record) (Record, error) {
 	var response struct {
 		Record Record `json:"record"`
 	}
-	_, err := c.request(http.MethodPut, "/records/"+record.Id, nil, &record, &response)
+	_, err := c.request(http.MethodPut, "/records/"+record.ID, nil, &record, &response)
 	return response.Record, err
 }
 
-func (c *HdnsApiClient) DeleteRecord(record Record) error {
-	_, err := c.request(http.MethodDelete, "/records/"+record.Id, nil, nil, nil)
+// DeleteRecord deletes and existing record
+func (c *APIClient) DeleteRecord(record Record) error {
+	_, err := c.request(http.MethodDelete, "/records/"+record.ID, nil, nil, nil)
 	return err
 }
