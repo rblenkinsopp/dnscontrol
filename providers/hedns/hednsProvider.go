@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +23,7 @@ import (
 	"github.com/DNSControl/dnscontrol/v4/pkg/rtypecontrol"
 	"github.com/DNSControl/dnscontrol/v4/pkg/rtypeinfo"
 	"github.com/DNSControl/dnscontrol/v4/pkg/txtutil"
+	"github.com/DNSControl/dnscontrol/v4/pkg/zonecache"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/pquerna/otp/totp"
 )
@@ -155,6 +155,7 @@ type hednsProvider struct {
 	SessionFilePath string
 
 	httpClient http.Client
+	zoneCache  zonecache.ZoneCache[uint64]
 }
 
 // Record stores the HEDNS specific zone and record IDs.
@@ -197,6 +198,7 @@ func newHEDNSProvider(cfg map[string]string, _ json.RawMessage) (providers.DNSSe
 	// Create storage for the cookies
 	cookieJar, _ := cookiejar.New(nil)
 	client.httpClient = http.Client{Jar: cookieJar}
+	client.zoneCache = zonecache.New(client.listDomains)
 
 	err := client.authenticate()
 	return client, err
@@ -204,33 +206,23 @@ func newHEDNSProvider(cfg map[string]string, _ json.RawMessage) (providers.DNSSe
 
 // ListZones list all zones on this provider.
 func (c *hednsProvider) ListZones() ([]string, error) {
-	domainsMap, err := c.listDomains()
+	domains, err := c.zoneCache.GetZoneNames()
 	if err != nil {
 		return nil, err
 	}
-
-	domains := make([]string, 0, len(domainsMap))
-	for domain := range domainsMap {
-		domains = append(domains, domain)
-	}
-
-	// Ensure the order is deterministic
 	sort.Strings(domains)
-
-	return domains, err
+	return domains, nil
 }
 
 // EnsureZoneExists creates a zone if it does not exist.
 func (c *hednsProvider) EnsureZoneExists(domain string, metadata map[string]string) error {
-	domains, err := c.ListZones()
+	ok, err := c.zoneCache.HasZone(domain)
 	if err != nil {
 		return err
 	}
-
-	if slices.Contains(domains, domain) {
+	if ok {
 		return nil
 	}
-
 	return c.createDomain(domain)
 }
 
@@ -273,13 +265,9 @@ func (c *hednsProvider) GetZoneRecordsCorrections(dc *models.DomainConfig, recor
 		return nil, 0, err
 	}
 
-	// Get the SOA record to get the ZoneID, then remove it from the list.
-	zoneID := uint64(0)
-	var prunedRecords models.Records
+	prunedRecords := make(models.Records, 0, len(records))
 	for _, r := range records {
-		if r.Type == "SOA" {
-			zoneID = r.Original.(Record).ZoneID
-		} else {
+		if r.Type != "SOA" {
 			prunedRecords = append(prunedRecords, r)
 		}
 	}
@@ -308,7 +296,7 @@ func (c *hednsProvider) GetZoneRecordsCorrections(dc *models.DomainConfig, recor
 		}
 	}
 
-	return c.getDiff2DomainCorrections(dc, zoneID, prunedRecords)
+	return c.getDiff2DomainCorrections(dc, prunedRecords)
 }
 
 // resolveDynamic determines the desired dynamic flag for a record.
@@ -329,7 +317,12 @@ func resolveDynamic(newRec *models.RecordConfig, oldRec *Record) bool {
 	return false
 }
 
-func (c *hednsProvider) getDiff2DomainCorrections(dc *models.DomainConfig, zoneID uint64, records models.Records) ([]*models.Correction, int, error) {
+func (c *hednsProvider) getDiff2DomainCorrections(dc *models.DomainConfig, records models.Records) ([]*models.Correction, int, error) {
+	zoneID, err := c.zoneCache.GetZone(dc.Name)
+	if err != nil {
+		return nil, 0, err
+	}
+
 	// DDNS keys are write-only: HE DNS does not expose them for reading.
 	// Strip hedns_ddns_key from desired metadata before the diff so that it
 	// does not cause perpetual spurious changes, but save the intents so we
@@ -424,14 +417,12 @@ func (c *hednsProvider) GetZoneRecords(dc *models.DomainConfig) (models.Records,
 	var zoneRecords []*models.RecordConfig
 
 	// Get Domain ID
-	domains, err := c.listDomains()
+	domainID, err := c.zoneCache.GetZone(domain)
 	if err != nil {
+		if errors.Is(err, zonecache.ErrZoneNotFound) {
+			return nil, fmt.Errorf("domain %s does not exist", domain)
+		}
 		return nil, err
-	}
-
-	domainID, domainExists := domains[domain]
-	if !domainExists {
-		return nil, fmt.Errorf("domain %s does not exist", domain)
 	}
 
 	queryURL, _ := url.Parse(apiEndpoint)
@@ -678,8 +669,10 @@ func (c *hednsProvider) listDomains() (map[string]uint64, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseDomainsTable(document)
+}
 
-	// Check there are any domains in this account
+func parseDomainsTable(document *goquery.Document) (map[string]uint64, error) {
 	domains := make(map[string]uint64)
 	if document.Find("#domains_table").Size() == 0 {
 		return domains, nil
@@ -691,6 +684,7 @@ func (c *hednsProvider) listDomains() (map[string]uint64, error) {
 		"#tabs-advanced .generic_table > tbody > tr > td:last-child > img", // Reverse records
 	}, ", ")
 
+	var err error
 	document.Find(recordsSelector).EachWithBreak(func(index int, element *goquery.Selection) bool {
 		domainID, idExists := element.Attr("value")
 		domainName, nameExists := element.Attr("name")
@@ -718,8 +712,18 @@ func (c *hednsProvider) createDomain(domain string) error {
 	}
 	defer response.Body.Close()
 
-	_, err = c.parseResponseForDocumentAndErrors(response)
-	return err
+	document, err := c.parseResponseForDocumentAndErrors(response)
+	if err != nil {
+		return err
+	}
+	domains, err := parseDomainsTable(document)
+	if err != nil {
+		return err
+	}
+	if id, ok := domains[domain]; ok {
+		c.zoneCache.SetZone(domain, id)
+	}
+	return nil
 }
 
 func (c *hednsProvider) editZoneRecord(zoneID uint64, recordID uint64, rc *models.RecordConfig, create bool, dynamic bool) error {
