@@ -186,7 +186,6 @@ func newHEDNSProvider(cfg map[string]string, _ json.RawMessage) (providers.DNSSe
 		return nil, errors.New("totp and totp-key must not be specified at the same time")
 	}
 
-	// Perform the initial login
 	client := &hednsProvider{
 		Username:        username,
 		Password:        password,
@@ -195,13 +194,17 @@ func newHEDNSProvider(cfg map[string]string, _ json.RawMessage) (providers.DNSSe
 		SessionFilePath: sessionFilePath,
 	}
 
-	// Create storage for the cookies
+	// Create storage for the cookies.
 	cookieJar, _ := cookiejar.New(nil)
 	client.httpClient = http.Client{Jar: cookieJar}
 	client.zoneCache = zonecache.New(client.listDomains)
 
-	err := client.authenticate()
-	return client, err
+	// Reuse cached session file if one is set.
+	if client.SessionFilePath != "" {
+		_ = client.loadSessionFile()
+	}
+
+	return client, nil
 }
 
 // ListZones list all zones on this provider.
@@ -529,29 +532,6 @@ func (c *hednsProvider) GetZoneRecords(dc *models.DomainConfig) (models.Records,
 	return zoneRecords, err
 }
 
-func (c *hednsProvider) authResumeSession() (authenticated bool, requiresTfa bool, err error) {
-	response, err := c.httpClient.Get(apiEndpoint)
-	if err != nil {
-		return false, false, err
-	}
-	defer response.Body.Close()
-
-	document, err := c.parseResponseForDocumentAndErrors(response)
-	if err != nil {
-		// Deal with the edge case where we have attempted to use the same authentication token more than two times
-		if err.Error() == errorTotpTokenRequired {
-			return false, true, nil
-		}
-		return false, false, err
-	}
-
-	// Look for the presence of the login button or the TFA input
-	authenticated = document.Find("#_tlogout").Size() > 0
-	requiresTfa = document.Find("input#tfacode").Size() > 0
-
-	return authenticated, requiresTfa, err
-}
-
 func (c *hednsProvider) authUsernameAndPassword() (authenticated bool, requiresTfa bool, err error) {
 	// Login with username and password
 	response, err := c.httpClient.PostForm(apiEndpoint, url.Values{
@@ -620,56 +600,66 @@ func (c *hednsProvider) auth2FA() (authenticated bool, err error) {
 }
 
 func (c *hednsProvider) authenticate() error {
-	if c.SessionFilePath != "" {
-		_ = c.loadSessionFile()
-	}
-
-	authenticated, requiresTfa, err := c.authResumeSession()
+	authenticated, requiresTfa, err := c.authUsernameAndPassword()
 	if err != nil {
 		return err
 	}
 
-	if !authenticated {
-		// Only perform username and password login if two-factor authentication is not required at this stage
-		if !requiresTfa {
-			authenticated, requiresTfa, err = c.authUsernameAndPassword()
-			if err != nil {
-				return err
-			}
-		}
-
-		// Only perform two-factor authentication if required
-		if requiresTfa {
-			authenticated, err = c.auth2FA()
-			if err != nil {
-				return err
-			}
+	if requiresTfa {
+		authenticated, err = c.auth2FA()
+		if err != nil {
+			return err
 		}
 	}
 
 	if !authenticated {
-		err = errors.New("unknown authentication failure")
-	} else {
-		if c.SessionFilePath != "" {
-			err = c.saveSessionFile()
-		}
+		return errors.New("unknown authentication failure")
 	}
 
-	return err
+	if c.SessionFilePath != "" {
+		return c.saveSessionFile()
+	}
+	return nil
 }
 
 func (c *hednsProvider) listDomains() (map[string]uint64, error) {
-	response, err := c.httpClient.Get(apiEndpoint)
-	if err != nil {
+	fetchRoot := func() (*goquery.Document, error) {
+		response, err := c.httpClient.Get(apiEndpoint)
+		if err != nil {
+			return nil, err
+		}
+		defer response.Body.Close()
+		return goquery.NewDocumentFromReader(response.Body)
+	}
+
+	// With a cached session, try it first; the page reveals if it is still valid.
+	if c.hasSession() {
+		document, err := fetchRoot()
+		if err != nil {
+			return nil, err
+		}
+		// #_tlogout is only present once the session is authenticated.
+		if document.Find("#_tlogout").Size() > 0 {
+			return parseDomainsTable(document)
+		}
+	}
+
+	if err := c.authenticate(); err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
-
-	document, err := goquery.NewDocumentFromReader(response.Body)
+	document, err := fetchRoot()
 	if err != nil {
 		return nil, err
 	}
 	return parseDomainsTable(document)
+}
+
+func (c *hednsProvider) hasSession() bool {
+	u, err := url.Parse(apiEndpoint)
+	if err != nil {
+		return false
+	}
+	return len(c.httpClient.Jar.Cookies(u)) > 0
 }
 
 func parseDomainsTable(document *goquery.Document) (map[string]uint64, error) {
